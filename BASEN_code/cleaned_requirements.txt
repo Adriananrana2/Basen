@@ -14,8 +14,8 @@ certifi==2021.5.30
 cffi==1.14.6
 chardet==4.0.0
 colorama==0.4.6
-conda==4.10.3
-conda-package-handling==1.7.3
+# conda==4.10.3
+# conda-package-handling==1.7.3
 cryptography==3.4.8
 cycler==0.10.0
 debugpy==1.4.3
@@ -82,7 +82,7 @@ parso==0.8.2
 pesq==0.0.4
 pexpect==4.8.0
 pickleshare==0.7.5
-Pillow==8.3.2
+Pillow==8.4.0
 pooch==1.6.0
 prometheus-client==0.11.0
 prompt-toolkit==3.0.20
@@ -97,7 +97,7 @@ pydot==1.4.2
 Pygments==2.10.0
 pyOpenSSL==20.0.1
 pyparsing==2.4.7
-pypesq==1.2.4
+# pypesq==1.2.4
 pyrsistent==0.18.0
 PySocks==1.7.1
 pystoi==0.3.3
@@ -129,13 +129,13 @@ termcolor==2.1.1
 terminado==0.12.1
 testpath==0.5.0
 threadpoolctl==3.1.0
-torch @ http://download.pytorch.org/whl/cu111/torch-1.9.0%2Bcu111-cp38-cp38-linux_x86_64.whl
+torch==2.4.0
 torchinfo==1.7.1
-torchvision @ http://download.pytorch.org/whl/cu111/torchvision-0.10.0%2Bcu111-cp38-cp38-linux_x86_64.whl
+torchvision==0.19.0
 tornado==6.1
 tqdm==4.62.2
 traitlets==5.1.0
-typing-extensions==3.10.0.2
+typing-extensions>=4.8.0
 urllib3==1.26.7
 wcwidth==0.2.5
 webencodings==0.5.1
