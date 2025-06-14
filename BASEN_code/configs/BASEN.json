@@ -1,0 +1,34 @@
+{   
+    "network_config": {
+        "enc_channel": 64,
+        "feature_channel": 32,
+        "encoder_kernel_size": 32,
+        "layer_per_stack": 8,
+        "stacks": 3,
+        "kernel": 3,
+        "CMCA_layer_num": 3
+    },
+    "train_config": {
+        "exp_path": "BASEN",
+        "log":{
+            "directory": "./exp",
+            "ckpt_iter": "max",
+            "iters_per_ckpt": 500
+        },
+        "optimization":{
+            "epochs": 158880,
+            "learning_rate": 2e-4,
+            "batch_size_per_gpu": 8
+        }
+    },
+    "trainset_config": {
+        "root": "data"
+    },
+    "gen_config":{
+        "output_directory": "./exp"
+    },
+    "dist_config": {
+        "dist_backend": "nccl",
+        "dist_url": "tcp://localhost:54321"
+    }
+}

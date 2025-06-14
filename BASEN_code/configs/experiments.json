@@ -1,0 +1,11 @@
+{
+  "EEG_channel_exp": {
+    "model_path": "exp/BASEN/checkpoint/100000.pkl",
+    "experiment_num": 100,
+    "dataset_root": ""
+  },
+  "test": {
+    "model_path": "exp/BASEN/checkpoint/100000.pkl",
+    "dataset_root": "data"
+  }
+}
