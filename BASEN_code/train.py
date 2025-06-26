@@ -26,7 +26,6 @@ from torchinfo import summary
 
 
 def val(dataloader, model, loss_fn):
-
     num_batches = len(dataloader)
     model.eval()
     test_loss, correct = 0, 0
@@ -69,9 +68,9 @@ def train(num_gpus, rank, group_name,
                                              batch_size=optimization["batch_size_per_gpu"],
                                              num_gpus=num_gpus)
     valloader = load_CleanNoisyPairDataset(**trainset_config,
-                                             subset='val',
-                                             batch_size=optimization["batch_size_per_gpu"],
-                                             num_gpus=num_gpus)
+                                           subset='val',
+                                           batch_size=optimization["batch_size_per_gpu"],
+                                           num_gpus=num_gpus)
     print('Data loaded')
 
     # predefine model
@@ -79,7 +78,7 @@ def train(num_gpus, rank, group_name,
                 encoder_kernel_size=network_config["encoder_kernel_size"],
                 layer_per_stack=network_config["layer_per_stack"], stack=network_config["stacks"],
                 CMCA_layer_num=network_config["CMCA_layer_num"]).cuda()
-    #summary(net, input_size=[(8, 1, 29184), (8, 128, 29184)])
+    # summary(net, input_size=[(8, 1, 29184), (8, 128, 29184)])
     print_size(net)
 
     # apply gradient all reduce
@@ -108,7 +107,7 @@ def train(num_gpus, rank, group_name,
             # record training time based on elapsed time
             time0 -= checkpoint['training_time_seconds']
             print('Model at iteration %s has been trained for %s seconds' % (
-            ckpt_iter, checkpoint['training_time_seconds']))
+                ckpt_iter, checkpoint['training_time_seconds']))
             print('checkpoint model loaded successfully')
         except:
             ckpt_iter = -1
@@ -131,7 +130,6 @@ def train(num_gpus, rank, group_name,
         phase=('linear', 'cosine'),
     )
 
-
     sisdr = si_sidrloss().cuda()
 
     last_val_loss = 100.0
@@ -144,7 +142,6 @@ def train(num_gpus, rank, group_name,
             clean_audio = clean_audio.cuda()
             noisy_audio = noisy_audio.cuda()
             eeg = eeg.cuda()
-
 
             optimizer.zero_grad()
             X = (noisy_audio, eeg, clean_audio)

@@ -5,7 +5,6 @@ import numpy as np
 from torch.utils.data.distributed import DistributedSampler
 
 
-
 class cock_tail(Dataset):
     def __init__(self, root, mode, subject=None):
         super(cock_tail).__init__()
@@ -98,6 +97,7 @@ class cock_tail(Dataset):
             clean_f.close()
             eeg_f.close()
         return n_d, e_d, c_d
+
 
 def load_CleanNoisyPairDataset(root, subset, batch_size, num_gpus=1):
     """
