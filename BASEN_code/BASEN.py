@@ -6,28 +6,29 @@ from utility import models
 
 
 class EEGEncoder(nn.Module):
-    def __init__(self, layer, enc_channel=64, feature_channel=32, kernel_size=32,
-                 kernel=3, skip=True, dilated=True):
+    def __init__(self, layer, enc_channel=64, feature_channel=32, proj_kernel_size=1,
+                 kernel_size=3, skip=True, dilated=False):
         super(EEGEncoder, self).__init__()
         # hyper parameters
         self.enc_channel = enc_channel
         self.feature_channel = feature_channel
 
-        self.proj_kernel_size = kernel_size
-        self.stride = 8
+        self.proj_kernel_size = proj_kernel_size
+        self.stride = 1
 
         self.layer = layer
-        self.kernel = kernel
+        self.kernel_size = kernel_size
         self.dilated = dilated
 
-        self.projection = nn.Conv1d(128, feature_channel, self.proj_kernel_size, bias=False, stride=self.stride)
+        self.projection = nn.Conv1d(20, feature_channel, self.proj_kernel_size, bias=False, stride=self.stride)
         self.encoder = nn.ModuleList([])
         for i in range(layer):
             if self.dilated:
-                self.encoder.append(models.DepthConv1d(feature_channel, feature_channel * 2, kernel, dilation=2 ** i,
-                                                       padding=2 ** i, skip=skip))
+                self.encoder.append(
+                    models.DepthConv1d(feature_channel, feature_channel * 2, kernel_size, dilation=2 ** i,
+                                       padding=2 ** i, skip=skip))
             else:
-                self.encoder.append(models.DepthConv1d(feature_channel, feature_channel * 2, kernel, dilation=1,
+                self.encoder.append(models.DepthConv1d(feature_channel, feature_channel * 2, kernel_size, dilation=1,
                                                        padding=1, skip=skip))
         self.output = nn.Sequential(nn.PReLU(),
                                     nn.Conv1d(feature_channel, feature_channel, 1)
@@ -40,6 +41,36 @@ class EEGEncoder(nn.Module):
             output = output + residual
 
         return output
+
+
+class InstrumentEncoder(nn.Module):
+    def __init__(self, input_channels, hidden_dim, n_res_blocks=3):
+        super().__init__()
+        self.proj = nn.Conv1d(input_channels, 128, kernel_size=1)
+        self.res_blocks = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv1d(128, 128, kernel_size=3, padding=1),
+                nn.GroupNorm(1, 128),
+                nn.PReLU(),
+                nn.Conv1d(128, 128, kernel_size=3, padding=1),
+                nn.GroupNorm(1, 128)
+            ) for _ in range(n_res_blocks)
+        ])
+        self.out_prelu = nn.PReLU()
+        self.maxpool = nn.AdaptiveMaxPool1d(32)
+        self.lstm = nn.LSTM(input_size=128, hidden_size=hidden_dim, batch_first=True)
+
+    def forward(self, x):  # x: [B, C, T]
+        x = self.proj(x)
+        for block in self.res_blocks:
+            residual = x
+            x = block(x)
+            x = x + residual
+        x = self.out_prelu(x)
+        x = self.maxpool(x)
+        x = x.permute(0, 2, 1)
+        _, (h_n, _) = self.lstm(x)
+        return h_n.squeeze(0)  # [B, hidden_dim]
 
 
 class BASEN(nn.Module):
@@ -60,21 +91,23 @@ class BASEN(nn.Module):
         super(BASEN, self).__init__()
 
         # hyper parameters
-        # self.num_spk = num_spk
-
         self.enc_channel = enc_channel
         self.feature_channel = feature_channel
         self.num_spk = 1
-        self.encoder_kernel = encoder_kernel_size
-        self.stride = 8
+        self.encoder_kernel_size = encoder_kernel_size
+        self.stride = 4
         self.win = 32
         self.layer = layer_per_stack
         self.stack = stack
         self.kernel = kernel
+
         # EEG encoder
+        self.attractor_dim = 64
+        self.instrument_encoder = InstrumentEncoder(input_channels=self.enc_channel, hidden_dim=self.attractor_dim)
         self.spike_encoder = EEGEncoder(layer=8, enc_channel=enc_channel, feature_channel=feature_channel)
+
         # audio encoder
-        self.audio_encoder = nn.Conv1d(1, self.enc_channel, self.encoder_kernel, bias=False, stride=self.stride)
+        self.audio_encoder = nn.Conv1d(2, self.enc_channel, self.encoder_kernel_size, bias=False, stride=self.stride)
 
         # TCN separation network from Conv-TasNet
         self.TCN = models.TCN(self.enc_channel, self.enc_channel, self.feature_channel, self.feature_channel * 4,
@@ -83,48 +116,48 @@ class BASEN(nn.Module):
         self.receptive_field = self.TCN.receptive_field
 
         # output decoder
-        self.decoder = nn.ConvTranspose1d(self.enc_channel, 1, self.encoder_kernel, bias=False, stride=self.stride)
+        self.decoder = nn.ConvTranspose1d(self.enc_channel, 1, self.encoder_kernel_size, bias=False, stride=self.stride)
 
-    def pad_signal(self, input):
-
-        # input is the waveforms: (B, T) or (B, 1, T)
-        # reshape and padding
-        if input.dim() not in [2, 3]:
-            raise RuntimeError("Input can only be 2 or 3 dimensional.")
-
-        if input.dim() == 2:
-            input = input.unsqueeze(1)
+    def forward(self, input, spike_input, a_s_past):
         batch_size = input.size(0)
-        nsample = input.size(2)
-        rest = self.win - (self.stride + nsample % self.win) % self.win
-        if rest > 0:
-            pad = Variable(torch.zeros(batch_size, 1, rest)).type(input.type())
-            input = torch.cat([input, pad], 2)
 
-        pad_aux = Variable(torch.zeros(batch_size, 1, self.stride)).type(input.type())
-        input = torch.cat([pad_aux, input, pad_aux], 2)
+        # === 1. Encode raw audio ===
+        # input shape: (8, 2, 8820)  # raw audio for current 0.2s
+        # --> encoded shape: (8, 64, 2198)  # (8820 - 32)//4 + 1 = 2198
+        enc_output = self.audio_encoder(input)
 
-        return input, rest
+        # === 2. Encode EEG ===
+        # spike_input shape: (8, 20, 1280)  # EEG for 1s (0.8s past + 0.2s now)
+        # --> encoded EEG: (8, 32, 1280)  # kernel=1, stride=1 → same length
+        spike_input = torch.nn.functional.interpolate(
+            spike_input,
+            size=11018,  # desired time dimension length
+            mode='linear',  # linear interpolation for time series
+            align_corners=False)  # Result shape: (8, 20, 11018)
 
-    def forward(self, input, spike_input):
-
-        # padding
-        output, rest = self.pad_signal(input)
-        # spike, rest = self.pad_signal(spike_input)
-        batch_size = output.size(0)
-
-        # waveform encoder
-        enc_output = self.audio_encoder(output)  # B, N, L
         enc_output_spike = self.spike_encoder(spike_input)
-        # generate masks
-        masks = torch.sigmoid(self.TCN(enc_output, enc_output_spike)).view(batch_size, self.num_spk, self.enc_channel,
-                                                                           -1)  # B, C, N, L
-        masked_output = enc_output.unsqueeze(1) * masks  # B, C, N, L
 
-        # waveform decoder
-        output = self.decoder(masked_output.view(batch_size * self.num_spk, self.enc_channel, -1))  # B*C, 1, L
-        output = output[:, :, self.stride:-(rest + self.stride)].contiguous()  # B*C, 1, L
-        output = output.view(batch_size, self.num_spk, -1)  # B, C, T
+        # === 3. Concatenate attractor with current encoded audio ===
+        # a_s_past: (8, 64, 8813)  # past 0.8s encoded
+        # enc_output: (8, 64, 2198)  # current 0.2s encoded
+        # --> a_s_full: (8, 64, 11011)  # combined 1s sliding window
+        a_s_full = torch.cat([a_s_past, enc_output], dim=-1)
+
+        # === 4. Apply TCN and masks ===
+        masks = torch.sigmoid(self.TCN(a_s_full, enc_output_spike)).view(
+            batch_size, self.num_spk, self.enc_channel, -1
+        )
+        # masks shape: (8, 1, 64, 11011)
+        # Apply masks to full 1s sliding window
+        masked_output = a_s_full.unsqueeze(1) * masks  # (8, 1, 64, 11011)
+
+        # === 5. Decode waveform ===
+        # masked_output reshaped: (8, 64, 11011)
+        # output shape after decoder: (8, 1, 44132)
+        output = self.decoder(masked_output.view(batch_size * self.num_spk, self.enc_channel, -1))
+
+        # Final output shape: (8, 1, 44100)  # clean 1s audio
+        output = output.view(batch_size, self.num_spk, -1)
 
         return output
 

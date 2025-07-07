@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-input_length = 3650
+input_length = 11018
 
 
 # Depth-Wise Conv1D block from Conv-TasNet

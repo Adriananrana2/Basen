@@ -1,3 +1,4 @@
+from utility.buffer import SlidingAttractorBuffer
 import os
 import time
 import argparse
@@ -6,6 +7,7 @@ import json
 import numpy as np
 import torch
 import torch.nn as nn
+import torchaudio
 from torch.utils.tensorboard import SummaryWriter
 
 import random
@@ -25,14 +27,14 @@ from BASEN import BASEN
 from torchinfo import summary
 
 
-def val(dataloader, model, loss_fn):
+def val(dataloader, model, loss_fn, a_s_past):
     num_batches = len(dataloader)
     model.eval()
     test_loss, correct = 0, 0
     with torch.no_grad():
-        for noisy, eeg, clean in dataloader:
+        for noisy, eeg, clean, _ in dataloader:
             noisy, eeg, clean = noisy.cuda(), eeg.cuda(), clean.cuda()
-            pred = model(noisy, eeg)
+            pred = model(noisy, eeg, a_s_past)
 
             test_loss += loss_fn(pred, clean).item()
     test_loss /= num_batches
@@ -134,55 +136,133 @@ def train(num_gpus, rank, group_name,
 
     last_val_loss = 100.0
     epoch = 0
-    # 2684 iterations for 1 epoch
+    # data set / batch sizt = iterations for 1 epoch
     while epoch < optimization["epochs"]:
-        # for each iteration
-        for noisy_audio, eeg, clean_audio in trainloader:
+        # for each iteration (a batch)
+        for mixed_audio, eeg, clean_audio, input_paths in trainloader:
 
+            # Load a batch
             clean_audio = clean_audio.cuda()
-            noisy_audio = noisy_audio.cuda()
+            mixed_audio = mixed_audio.cuda()
             eeg = eeg.cuda()
 
-            optimizer.zero_grad()
-            X = (noisy_audio, eeg, clean_audio)
-            loss = loss_fn(net, X, mrstftloss=sisdr)
-            if num_gpus > 1:
-                reduced_loss = reduce_tensor(loss.data, num_gpus).item()
-            else:
-                reduced_loss = loss.item()
-            loss.backward()
-            grad_norm = nn.utils.clip_grad_norm_(net.parameters(), 1e9)
-            scheduler.step()
-            optimizer.step()
+            # Prepare for sliding window
+            total_audio_len = mixed_audio.shape[-1]  # (8, 2, 837900)[-1] = 837900
+            audio_window_size = 44100  # 1 second of audio
+            audio_window_stride = int(audio_window_size / 5)  # 0.2 seconds = 8820 samples
+            eeg_window_size = 1280  # 1s of EEG at 1280Hz
+            eeg_window_stride = int(eeg_window_size / 5)  # 0.2s = 256 samples
+            audio_ptr = int(audio_window_size * 0.8)  # 35280 (0.8s past + 0.2s new)
+            eeg_ptr = int(eeg_window_size * 0.8)  # 1024 (0.8s past + 0.2s new)
+            past_extracted_audio = mixed_audio[:, :, :audio_ptr]  # shape: (8, 2, 35280), pseudo attractor at first
+            collected_audio = []  # To save fully extracted audio
+            attractor_buffer = SlidingAttractorBuffer(net.audio_encoder, net.instrument_encoder,
+                                                      max_len=35308)  # Init sliding buffers for online mode, 0.8 sec of audio + 7 steps
 
-            # save checkpoint
-            if n_iter > 0 and n_iter % log["iters_per_ckpt"] == 0 and rank == 0:
-                print("iteration: {} \treduced loss: {:.7f} \tloss: {:.7f}".format(
-                    n_iter, reduced_loss, loss.item()), flush=True)
+            # Sliding window
+            while audio_ptr + audio_window_stride <= total_audio_len:
+                # === 1. Generate attractor from past extracted audio ===
+                # past_extracted_audio shape: (8, 1, 35280)
+                # Append 28 zeros for 7 missing steps (kernel continuity)
+                padding_audio = torch.zeros(past_extracted_audio.shape[0], past_extracted_audio.shape[1], 28,
+                                            device=past_extracted_audio.device)
+                padded_past_audio = torch.cat([past_extracted_audio, padding_audio], dim=-1)  # shape: (8, 1, 35308)
+                audio_attractor = attractor_buffer.append(padded_past_audio)
 
-                val_loss = val(valloader, net, sisdr)
-                net.train()
+                # === 2. Read current 0.2s raw mixture input ===
+                current_audio_input = mixed_audio[:, :,
+                                      audio_ptr:audio_ptr + audio_window_stride]  # shape: (8, 2, 8820)
 
-                if rank == 0:
-                    # save to tensorboard
-                    tb.add_scalar("Train/Train-Loss", loss.item(), n_iter)
-                    tb.add_scalar("Train/Train-Reduced-Loss", reduced_loss, n_iter)
-                    tb.add_scalar("Train/Gradient-Norm", grad_norm, n_iter)
-                    tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], n_iter)
-                    tb.add_scalar("Val/Val-Loss", val_loss, n_iter)
-                if val_loss < last_val_loss:
-                    print('validation loss decreases from {} to {}, save checkpoint'.format(last_val_loss, val_loss))
-                    checkpoint_name = '{}.pkl'.format(n_iter)
-                    torch.save({'iter': n_iter,
-                                'model_state_dict': net.state_dict(),
-                                'optimizer_state_dict': optimizer.state_dict(),
-                                'training_time_seconds': int(time.time() - time0)},
-                               os.path.join(ckpt_directory, checkpoint_name))
-                    print('model at iteration %s is saved' % n_iter)
+                # === 3. Read aligned 1s EEG: [0.8s past + 7 steps of padding + 0.2s now] ===
+                past_eeg = eeg[:, :, eeg_ptr - int(eeg_window_size * 0.8): eeg_ptr]  # shape: (8, 20, 1024)
+                padding_eeg = torch.zeros(past_eeg.shape[0], past_eeg.shape[1], 7, device=past_eeg.device)
+                padded_past_eeg = torch.cat([past_eeg, padding_eeg], dim=-1)  # shape: (8, 20, 1031)
+                asec_7stride_eeg = torch.cat(
+                    [padded_past_eeg, eeg[:, :, eeg_ptr: eeg_ptr + int(eeg_window_size * 0.2)]],
+                    dim=-1)  # shape: (8, 20, 1287)
+
+                # === 4. Read corresponding 1s clean target ===
+                current_clean = clean_audio[:, :, audio_ptr - int(audio_window_size * 0.8): audio_ptr + int(
+                    audio_window_size * 0.2)]  # shape: (8, 1, 44100)
+
+                # === 5. Forward pass ===
+                # current_audio_input ([8, 2, 8820]) 44100*0.2=8820 0.2s audio input
+                # asec_7stride_eeg ([8, 20, 1287]) 256*5+7=1287
+                # audio_attractor ([8, 64, 8820]) a_s streach to (44100*0.8-32)/4+1 + 7 = 8820
+                output = net(current_audio_input, asec_7stride_eeg, a_s_past=audio_attractor)  # output: (8, 1, 44100)
+
+                # === 6. Collect audio ===
+                if len(collected_audio) == 0:
+                    collected_audio.append(output[:, :, :])  # first 1s
                 else:
-                    print('validation loss did not decrease')
+                    collected_audio.append(output[:, :, -audio_window_stride:])  # last 0.2s (8820 samples)
 
-            n_iter += 1
+                # === 7. Compute loss and optimize ===
+                optimizer.zero_grad()
+                loss = sisdr(output, current_clean)
+                if num_gpus > 1:
+                    reduced_loss = reduce_tensor(loss.data, num_gpus).item()
+                else:
+                    reduced_loss = loss.item()
+                loss.backward()
+                grad_norm = nn.utils.clip_grad_norm_(net.parameters(), 1e9)
+                scheduler.step()
+                optimizer.step()
+
+                # === 8. Update past extracted audio ===
+                past_extracted_audio = output[:, :, -int(audio_window_size * 0.8):]  # shape: (8, 1, 35280)
+
+                # Advance time pointers by 0.2s
+                n_iter += 1
+                audio_ptr += audio_window_stride
+                eeg_ptr += eeg_window_stride
+
+                # save checkpoint
+                if n_iter > 0 and n_iter % log["iters_per_ckpt"] == 0 and rank == 0:
+                    print("iteration: {} \treduced loss: {:.7f} \tloss: {:.7f}".format(
+                        n_iter, reduced_loss, loss.item()), flush=True)
+
+                    val_loss = val(valloader, net, sisdr, audio_attractor)
+                    net.train()
+
+                    if rank == 0:
+                        # save to tensorboard
+                        tb.add_scalar("Train/Train-Loss", loss.item(), n_iter)
+                        tb.add_scalar("Train/Train-Reduced-Loss", reduced_loss, n_iter)
+                        tb.add_scalar("Train/Gradient-Norm", grad_norm, n_iter)
+                        tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], n_iter)
+                        tb.add_scalar("Val/Val-Loss", val_loss, n_iter)
+                    if val_loss < last_val_loss:
+                        print(
+                            'validation loss decreases from {} to {}, save checkpoint'.format(last_val_loss, val_loss))
+                        checkpoint_name = '{}.pkl'.format(n_iter)
+                        torch.save({'iter': n_iter,
+                                    'model_state_dict': net.state_dict(),
+                                    'optimizer_state_dict': optimizer.state_dict(),
+                                    'training_time_seconds': int(time.time() - time0)},
+                                   os.path.join(ckpt_directory, checkpoint_name))
+                        print('model at iteration %s is saved' % n_iter)
+                    else:
+                        print('validation loss did not decrease')
+
+            # === Save extracted audio ===
+            # Concatenate all collected output chunks (1s + 0.2s * 94 = 19s)
+            full_extracted = torch.cat(collected_audio, dim=-1)  # shape: (8, 1, 837900)
+
+            # Create save directory
+            save_dir = os.path.join(os.path.dirname(__file__), "extracted_audio")
+            os.makedirs(save_dir, exist_ok=True)
+
+            # Save each sample using original filename
+            for i in range(full_extracted.shape[0]):
+                original_path = input_paths[i]  # full path to stimulus_wav
+                filename = os.path.basename(original_path)  # e.g., "0001_xyz_stimulus.wav"
+                base = "_".join(filename.split("_")[:-1]) + ".wav"  # strip "_stimulus"
+                save_path = os.path.join(save_dir, base)
+
+                waveform = full_extracted[i, 0].detach().cpu()
+                torchaudio.save(save_path, waveform.unsqueeze(0), sample_rate=44100)
+
         epoch += 1
         print('epoch {} done'.format(epoch))
     # After training, close TensorBoard.

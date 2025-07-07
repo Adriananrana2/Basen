@@ -1,4 +1,4 @@
-{   
+{
     "network_config": {
         "enc_channel": 64,
         "feature_channel": 32,
@@ -10,21 +10,23 @@
     },
     "train_config": {
         "exp_path": "BASEN",
-        "log":{
+        "log": {
             "directory": "./exp",
             "ckpt_iter": "max",
             "iters_per_ckpt": 500
         },
-        "optimization":{
+        "optimization": {
             "epochs": 158880,
             "learning_rate": 2e-4,
-            "batch_size_per_gpu": 8
+            "batch_size_per_gpu": 41
         }
     },
     "trainset_config": {
-        "root": "data"
+        "stimulus_wav_dir": "../../../Dataset/MADEEG/processed_data/stimulus_wav",
+        "isolated_wav_dir": "../../../Dataset/MADEEG/processed_data/isolated_wav",
+        "response_npy_dir": "../../../Dataset/MADEEG/processed_data/response_npy"
     },
-    "gen_config":{
+    "gen_config": {
         "output_directory": "./exp"
     },
     "dist_config": {
