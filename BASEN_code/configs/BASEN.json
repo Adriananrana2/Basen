@@ -13,12 +13,12 @@
         "log": {
             "directory": "./exp",
             "ckpt_iter": "max",
-            "iters_per_ckpt": 500
+            "iters_per_ckpt": 5
         },
         "optimization": {
             "epochs": 158880,
             "learning_rate": 2e-4,
-            "batch_size_per_gpu": 41
+            "batch_size_per_gpu": 6
         }
     },
     "trainset_config": {

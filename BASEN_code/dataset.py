@@ -2,7 +2,7 @@ import os
 import torch
 import numpy as np
 import soundfile as sf
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 
 
 class EEGAudioDataset(Dataset):
@@ -52,14 +52,23 @@ class EEGAudioDataset(Dataset):
             raise e
 
 
-def load_CleanNoisyPairDataset(stimulus_wav_dir, isolated_wav_dir, response_npy_dir, subset, batch_size, num_gpus=1):
+def load_CleanNoisyPairDataset(stimulus_wav_dir, isolated_wav_dir, response_npy_dir, batch_size, num_gpus=1):
     dataset = EEGAudioDataset(stimulus_wav_dir, isolated_wav_dir, response_npy_dir)
+    train_size = int(0.76 * len(dataset))
+    val_size = len(dataset) - train_size
+    generator = torch.Generator().manual_seed(42)
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator=generator)
     kwargs = {"batch_size": batch_size, "num_workers": 4, "pin_memory": False, "drop_last": False}
+    train_loader = DataLoader(train_dataset, shuffle=True, **kwargs)
+    val_loader = DataLoader(val_dataset, shuffle=False, **kwargs)
 
-    if num_gpus > 1:
-        from torch.utils.data.distributed import DistributedSampler
-        sampler = DistributedSampler(dataset)
-        return DataLoader(dataset, sampler=sampler, **kwargs)
-    else:
-        shuffle = (subset == "train")
-        return DataLoader(dataset, shuffle=shuffle, **kwargs)
+    return train_loader, val_loader
+
+
+    # if num_gpus > 1:
+    #     from torch.utils.data.distributed import DistributedSampler
+    #     sampler = DistributedSampler(dataset)
+    #     return DataLoader(dataset, sampler=sampler, **kwargs)
+    # else:
+    #     shuffle = (subset == "train")
+    #     return DataLoader(dataset, shuffle=shuffle, **kwargs)
