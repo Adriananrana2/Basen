@@ -33,7 +33,7 @@ def val(dataloader, net, loss_fn):
     total_iter = 0
     with torch.no_grad():
         # for each iteration (a batch)
-        for mixed_audio, eeg, clean_audio, _ in dataloader:
+        for mixed_audio, eeg, clean_audio, input_paths in dataloader:
 
             # Load a batch
             clean_audio = clean_audio.cuda()
@@ -42,15 +42,19 @@ def val(dataloader, net, loss_fn):
 
             # Prepare for sliding window
             total_audio_len = mixed_audio.shape[-1]  # (8, 2, 837900)[-1] = 837900
+
             audio_window_size = 44100  # 1 second of audio
             audio_window_stride = int(audio_window_size / 5)  # 0.2 seconds = 8820 samples
+            audio_ptr = int(audio_window_size * 0.8)  # 35280 (0.8s past + 0.2s new)
+
             eeg_window_size = 1280  # 1s of EEG at 1280Hz
             eeg_window_stride = int(eeg_window_size / 5)  # 0.2s = 256 samples
-            audio_ptr = int(audio_window_size * 0.8)  # 35280 (0.8s past + 0.2s new)
             eeg_ptr = int(eeg_window_size * 0.8)  # 1024 (0.8s past + 0.2s new)
+
             past_extracted_audio = mixed_audio[:, :, :audio_ptr]  # shape: (8, 2, 35280), pseudo attractor at first
             attractor_buffer = SlidingAttractorBuffer(net.audio_encoder, net.instrument_encoder,
                                                       max_len=35308)  # Init sliding buffers for online mode, 0.8 sec of audio + 7 steps
+            collected_audio = []  # To save fully extracted audio
 
             # Sliding window
             while audio_ptr + audio_window_stride <= total_audio_len:
@@ -86,13 +90,36 @@ def val(dataloader, net, loss_fn):
                 pred = net(current_audio_input, asec_7stride_eeg, a_s_past=audio_attractor)  # output: (8, 1, 44100)
                 test_loss += loss_fn(pred, current_clean).item()
 
-                # === 6. Update past extracted audio ===
+                # === 6. Collect audio ===
+                if len(collected_audio) == 0:
+                    collected_audio.append(pred[:, :, :])  # first 1s
+                else:
+                    collected_audio.append(pred[:, :, -audio_window_stride:])  # last 0.2s (8820 samples)
+
+                # === 7. Update past extracted audio ===
                 past_extracted_audio = pred[:, :, -int(audio_window_size * 0.8):]  # shape: (8, 1, 35280)
 
-                # === 7. Advance time pointers by 0.2s
+                # === 8. Advance time pointers by 0.2s
                 total_iter += 1
                 audio_ptr += audio_window_stride
                 eeg_ptr += eeg_window_stride
+
+            # === Save extracted audio ===
+            # Concatenate all collected output chunks (1s + 0.2s * 94 = 19s)
+            full_extracted = torch.cat(collected_audio, dim=-1)  # shape: (8, 1, 837900)
+
+            # Create save directory
+            save_dir = os.path.join(os.path.dirname(__file__), "extracted_audio")
+            os.makedirs(save_dir, exist_ok=True)
+
+            # Save each sample using original filename
+            for i in range(full_extracted.shape[0]):
+                original_path = input_paths[i]  # full path to stimulus_wav
+                filename = os.path.basename(original_path)  # e.g., "0001_xyz_stimulus.wav"
+                base = "_".join(filename.split("_")[:-1]) + ".wav"  # strip "_stimulus"
+                save_path = os.path.join(save_dir, base)
+                waveform = full_extracted[i, 0].detach().cpu()
+                torchaudio.save(save_path, waveform.unsqueeze(0), sample_rate=44100)
 
     test_loss /= total_iter
     print(f"Val Avg loss: {test_loss:>8f}")
@@ -187,13 +214,13 @@ def train(num_gpus, rank, group_name,
     sisdr = si_sidrloss().cuda()
 
     last_val_loss = 100.0
-    last_sample_loss = 100.0
     epoch = 0
     # data set / batch sizt = iterations for 1 epoch
     while epoch < optimization["epochs"]:
         print("========== EPOCH ", epoch, " ==========", sep="")
+
         # for each iteration (a batch)
-        for mixed_audio, eeg, clean_audio, input_paths in trainloader:
+        for mixed_audio, eeg, clean_audio, _ in trainloader:
 
             # Load a batch
             clean_audio = clean_audio.cuda()
@@ -202,29 +229,29 @@ def train(num_gpus, rank, group_name,
 
             # Prepare for sliding window
             total_audio_len = mixed_audio.shape[-1]  # (8, 2, 837900)[-1] = 837900
+
             audio_window_size = 44100  # 1 second of audio
             audio_window_stride = int(audio_window_size / 5)  # 0.2 seconds = 8820 samples
+            audio_ptr = int(audio_window_size * 0.8)  # 35280 (0.8s past + 0.2s new)
+
             eeg_window_size = 1280  # 1s of EEG at 1280Hz
             eeg_window_stride = int(eeg_window_size / 5)  # 0.2s = 256 samples
-            audio_ptr = int(audio_window_size * 0.8)  # 35280 (0.8s past + 0.2s new)
             eeg_ptr = int(eeg_window_size * 0.8)  # 1024 (0.8s past + 0.2s new)
+
             past_extracted_audio = mixed_audio[:, :, :audio_ptr]  # shape: (8, 2, 35280), pseudo attractor at first
-            collected_audio = []  # To save fully extracted audio
             attractor_buffer = SlidingAttractorBuffer(net.audio_encoder, net.instrument_encoder,
                                                       max_len=35308)  # Init sliding buffers for online mode, 0.8 sec of audio + 7 steps
 
             # Sliding window
+            # Training loss tool
+            sample_loss = 0.0
             n_slide = 0
-            cur_sample_loss = 0
             while audio_ptr + audio_window_stride <= total_audio_len:
                 n_slide += 1
                 # === 1. Generate attractor from past extracted audio ===
                 # past_extracted_audio shape: (8, 1, 35280)
                 # Append 28 zeros for 7 missing steps (kernel continuity)
-                padding_audio = torch.zeros(past_extracted_audio.shape[0], past_extracted_audio.shape[1], 28,
-                                            device=past_extracted_audio.device)
-                padded_past_audio = torch.cat([past_extracted_audio, padding_audio], dim=-1)  # shape: (8, 1, 35308)
-                audio_attractor = attractor_buffer.append(padded_past_audio)
+                audio_attractor = attractor_buffer.append(past_extracted_audio)
 
                 # === 2. Read current 0.2s raw mixture input ===
                 current_audio_input = mixed_audio[:, :,
@@ -248,20 +275,14 @@ def train(num_gpus, rank, group_name,
                 # audio_attractor ([8, 64, 8820]) a_s streach to (44100*0.8-32)/4+1 + 7 = 8820
                 output = net(current_audio_input, asec_7stride_eeg, a_s_past=audio_attractor)  # output: (8, 1, 44100)
 
-                # === 6. Collect audio ===
-                if len(collected_audio) == 0:
-                    collected_audio.append(output[:, :, :])  # first 1s
-                else:
-                    collected_audio.append(output[:, :, -audio_window_stride:])  # last 0.2s (8820 samples)
-
-                # === 7. Compute loss and optimize ===
+                # === 6. Compute loss and optimize ===
                 optimizer.zero_grad()
                 loss = sisdr(output, current_clean)
                 if num_gpus > 1:
                     reduced_loss = reduce_tensor(loss.data, num_gpus).item()
                 else:
                     reduced_loss = loss.item()
-                cur_sample_loss += reduced_loss
+                sample_loss += reduced_loss
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(net.parameters(), 1e9)
                 scheduler.step()
@@ -275,17 +296,17 @@ def train(num_gpus, rank, group_name,
                 eeg_ptr += eeg_window_stride
 
             n_iter += 1
-            cur_sample_loss /= n_slide
             # save checkpoint
+            sample_loss /= n_slide
             if n_iter > 0 and n_iter % log["iters_per_ckpt"] == 0 and rank == 0:
-                print("iteration: {} \tsample loss: {:.7f}".format(n_iter, reduced_loss), flush=True)
+                print("iteration: {} \tsample loss: {:.7f}".format(n_iter, sample_loss), flush=True)
 
                 val_loss = val(valloader, net, sisdr)
                 net.train()
 
                 if rank == 0:
                     # save to tensorboard
-                    tb.add_scalar("Train/Train-Loss", loss.item(), n_iter)
+                    tb.add_scalar("Train/Train-Loss", sample_loss, n_iter)
                     tb.add_scalar("Train/Train-Reduced-Loss", reduced_loss, n_iter)
                     tb.add_scalar("Train/Gradient-Norm", grad_norm, n_iter)
                     tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], n_iter)
@@ -303,28 +324,6 @@ def train(num_gpus, rank, group_name,
                     print('model at iteration %s is saved' % n_iter)
                 else:
                     print('validation loss did not decrease')
-
-            # === Save extracted audio ===
-            if last_sample_loss > cur_sample_loss:
-                print("Sample loss dropped from ", last_sample_loss, " to ", cur_sample_loss, ". Start saving audio",
-                      sep="")
-                last_sample_loss = cur_sample_loss
-                # Concatenate all collected output chunks (1s + 0.2s * 94 = 19s)
-                full_extracted = torch.cat(collected_audio, dim=-1)  # shape: (8, 1, 837900)
-
-                # Create save directory
-                save_dir = os.path.join(os.path.dirname(__file__), "extracted_audio")
-                os.makedirs(save_dir, exist_ok=True)
-
-                # Save each sample using original filename
-                for i in range(full_extracted.shape[0]):
-                    original_path = input_paths[i]  # full path to stimulus_wav
-                    filename = os.path.basename(original_path)  # e.g., "0001_xyz_stimulus.wav"
-                    base = "_".join(filename.split("_")[:-1]) + ".wav"  # strip "_stimulus"
-                    save_path = os.path.join(save_dir, base)
-
-                    waveform = full_extracted[i, 0].detach().cpu()
-                    torchaudio.save(save_path, waveform.unsqueeze(0), sample_rate=44100)
 
         epoch += 1
         print('epoch {} done'.format(epoch))

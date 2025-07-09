@@ -13,7 +13,7 @@
         "log": {
             "directory": "./exp",
             "ckpt_iter": "max",
-            "iters_per_ckpt": 5
+            "iters_per_ckpt": 1
         },
         "optimization": {
             "epochs": 158880,

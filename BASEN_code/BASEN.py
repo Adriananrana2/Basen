@@ -142,6 +142,11 @@ class BASEN(nn.Module):
         # enc_output: (8, 64, 2198)  # current 0.2s encoded
         # --> a_s_full: (8, 64, 11011)  # combined 1s sliding window
         a_s_full = torch.cat([a_s_past, enc_output], dim=-1)
+        a_s_full = torch.nn.functional.interpolate(
+            a_s_full,
+            size=11018,  # desired time dimension length
+            mode='linear',  # linear interpolation for time series
+            align_corners=False)  # Result shape: (8, 20, 11018)
 
         # === 4. Apply TCN and masks ===
         masks = torch.sigmoid(self.TCN(a_s_full, enc_output_spike)).view(
