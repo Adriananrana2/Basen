@@ -26,9 +26,9 @@
         }
     },
     "trainset_config": {
-        "stimulus_wav_dir": "../../../Dataset/MADEEG/Gt/processed_data/stimulus_wav",
-        "isolated_wav_dir": "../../../Dataset/MADEEG/Gt/processed_data/isolated_wav",
-        "response_npy_dir": "../../../Dataset/MADEEG/Gt/processed_data/response_npy"
+        "stimulus_wav_dir": "../../../Dataset/MADEEG/processed_data/stimulus_wav",
+        "isolated_wav_dir": "../../../Dataset/MADEEG/processed_data/isolated_wav",
+        "response_npy_dir": "../../../Dataset/MADEEG/processed_data/response_npy"
     },
     "gen_config": {
         "output_directory": "./exp"
