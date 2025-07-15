@@ -5,4 +5,3 @@ BASEN_code/exp/BASEN/tensorboard/
 BASEN_code/extracted_audio/
 BASEN_code/utility/__pycache__/
 BASEN_code/exp/BASEN/checkpoint/
-train_original.py
