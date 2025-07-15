@@ -1,30 +1,26 @@
-from utility.buffer import SlidingAttractorBuffer
 import os
 import time
 import argparse
 import json
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torchaudio
-from torch.utils.tensorboard import SummaryWriter
-
 import random
 
-random.seed(0)
-torch.manual_seed(0)
-np.random.seed(0)
-
+from torch.utils.tensorboard import SummaryWriter
+from utility.buffer import SlidingAttractorBuffer
 from distributed import init_distributed, apply_gradient_allreduce, reduce_tensor
-
 from dataset import load_CleanNoisyPairDataset
 from sisdr_loss import si_sidrloss
 from util import rescale, find_max_epoch, print_size
 from util import LinearWarmupCosineDecay, loss_fn
-
 from BASEN import BASEN
 from torchinfo import summary
+
+random.seed(0)
+torch.manual_seed(0)
+np.random.seed(0)
 
 
 def val(dataloader, net, loss_fn):
@@ -150,7 +146,7 @@ def train(num_gpus, rank, group_name,
 
     # load training data
     trainloader, valloader = load_CleanNoisyPairDataset(**trainset_config,
-                                                        batch_size=optimization["batch_size_per_gpu"],
+                                                        batch_size=optimization["batch_size_per_gpu_online"],
                                                         num_gpus=num_gpus)
     print('Data loaded')
 
@@ -198,17 +194,20 @@ def train(num_gpus, rank, group_name,
         print('No valid checkpoint model found, start training from initialization.')
 
     # training
-    n_iter = ckpt_iter + 1
+    cur_iter = ckpt_iter + 1
 
     # define learning rate scheduler
+    n_epochs_train = optimization["epochs"]                      # See BASEN.json, 10
+    n_batchs_train = len(trainloader)                           # Number of batches in trainloader = 186/6 = 31
+    n_slides_train = 91                                          # ((44100 * 19)-44100) / (44100*0.2) + 1 = 91
     scheduler = LinearWarmupCosineDecay(
         optimizer,
-        lr_max=optimization["learning_rate"],
-        n_iter=optimization["epochs"],
-        iteration=n_iter,
-        divider=25,
-        warmup_proportion=0.05,
-        phase=('linear', 'cosine'),
+        lr_max=optimization["learning_rate"],                   # Target max learning rate
+        n_slide=n_epochs_train*n_batchs_train*n_slides_train,   # Total number of training steps or epochs
+        iteration=cur_iter,                                     # Current iteration (if resuming training)
+        divider=25,                                             # Initial LR = lr_max / divider
+        warmup_proportion=0.05,                                 # Warmup = first 5% of steps
+        phase=('linear', 'cosine'),                             # Use linear warmup + cosine decay
     )
 
     sisdr = si_sidrloss().cuda()
@@ -295,33 +294,33 @@ def train(num_gpus, rank, group_name,
                 audio_ptr += audio_window_stride
                 eeg_ptr += eeg_window_stride
 
-            n_iter += 1
+            cur_iter += 1
             # save checkpoint
             sample_loss /= n_slide
-            if n_iter > 0 and n_iter % log["iters_per_ckpt"] == 0 and rank == 0:
-                print("iteration: {} \tsample loss: {:.7f}".format(n_iter, sample_loss), flush=True)
+            if cur_iter > 0 and cur_iter % log["iters_per_ckpt"] == 0 and rank == 0:
+                print("iteration: {} \tsample loss: {:.7f}".format(cur_iter, sample_loss), flush=True)
 
                 val_loss = val(valloader, net, sisdr)
                 net.train()
 
                 if rank == 0:
                     # save to tensorboard
-                    tb.add_scalar("Train/Train-Loss", sample_loss, n_iter)
-                    tb.add_scalar("Train/Train-Reduced-Loss", reduced_loss, n_iter)
-                    tb.add_scalar("Train/Gradient-Norm", grad_norm, n_iter)
-                    tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], n_iter)
-                    tb.add_scalar("Val/Val-Loss", val_loss, n_iter)
+                    tb.add_scalar("Train/Train-Loss", sample_loss, cur_iter)
+                    tb.add_scalar("Train/Train-Reduced-Loss", reduced_loss, cur_iter)
+                    tb.add_scalar("Train/Gradient-Norm", grad_norm, cur_iter)
+                    tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], cur_iter)
+                    tb.add_scalar("Val/Val-Loss", val_loss, cur_iter)
                 if val_loss < last_val_loss:
                     print(
                         'validation loss decreases from {} to {}, save checkpoint'.format(last_val_loss, val_loss))
                     last_val_loss = val_loss
-                    checkpoint_name = '{}.pkl'.format(n_iter)
-                    torch.save({'iter': n_iter,
+                    checkpoint_name = '{}.pkl'.format(cur_iter)
+                    torch.save({'iter': cur_iter,
                                 'model_state_dict': net.state_dict(),
                                 'optimizer_state_dict': optimizer.state_dict(),
                                 'training_time_seconds': int(time.time() - time0)},
                                os.path.join(ckpt_directory, checkpoint_name))
-                    print('model at iteration %s is saved' % n_iter)
+                    print('model at iteration %s is saved' % cur_iter)
                 else:
                     print('validation loss did not decrease')
 

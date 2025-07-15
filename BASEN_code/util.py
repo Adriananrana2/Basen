@@ -103,7 +103,7 @@ class LinearWarmupCosineDecay:
         self,
         optimizer,
         lr_max,
-        n_iter,
+        n_slide,
         iteration=0,
         divider=25,
         warmup_proportion=0.3,
@@ -111,8 +111,8 @@ class LinearWarmupCosineDecay:
     ):
         self.optimizer = optimizer
 
-        phase1 = int(n_iter * warmup_proportion)
-        phase2 = n_iter - phase1
+        phase1 = int(n_slide * warmup_proportion)
+        phase2 = n_slide - phase1
         lr_min = lr_max / divider
 
         phase_map = {'linear': anneal_linear, 'cosine': anneal_cosine}

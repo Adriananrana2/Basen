@@ -178,3 +178,94 @@ def test_conv_tasnet():
 
 if __name__ == "__main__":
     test_conv_tasnet()
+
+
+class BASEN_OFFLINE(nn.Module):
+    """
+        The Brain-Assisted Speech Enhancement Network, This is adapted from Conv-TasNet.
+
+        args:
+        enc_channel: The encoder channel num
+        feature_channel: The hidden channel num in separation network
+        encoder_kernel_size: Kernel size of the audio encoder and eeg encoder
+        layer_per_stack: layer num of every stack
+        stack: The num of stacks
+        kernel: Kernel size in separation network
+    """
+
+    def __init__(self, enc_channel=64, feature_channel=32, encoder_kernel_size=32, layer_per_stack=8, stack=3,
+                 kernel=3, CMCA_layer_num=3):
+        super(BASEN_OFFLINE, self).__init__()
+
+        # hyper parameters
+        self.enc_channel = enc_channel
+        self.feature_channel = feature_channel
+        self.num_spk = 1
+        self.encoder_kernel_size = encoder_kernel_size
+        self.stride = 4
+        self.win = 32
+        self.layer = layer_per_stack
+        self.stack = stack
+        self.kernel = kernel
+
+        # EEG encoder
+        self.attractor_dim = 64
+        self.instrument_encoder = InstrumentEncoder(input_channels=self.enc_channel, hidden_dim=self.attractor_dim)
+        self.spike_encoder = EEGEncoder(layer=8, enc_channel=enc_channel, feature_channel=feature_channel)
+
+        # audio encoder
+        self.audio_encoder = nn.Conv1d(2, self.enc_channel, self.encoder_kernel_size, bias=False, stride=self.stride)
+
+        # TCN separation network from Conv-TasNet
+        self.TCN = models.TCN(self.enc_channel, self.enc_channel, self.feature_channel, self.feature_channel * 4,
+                              self.layer, self.stack, self.kernel, CMCA_layer_num=CMCA_layer_num)
+
+        self.receptive_field = self.TCN.receptive_field
+
+        # output decoder
+        self.decoder = nn.ConvTranspose1d(self.enc_channel, 1, self.encoder_kernel_size, bias=False, stride=self.stride)
+
+    def forward(self, input, spike_input):
+        batch_size = input.size(0)
+
+        # === 1. Encode raw audio ===
+        # input shape: (8, 2, 8820)  # raw audio for current 0.2s
+        # --> encoded shape: (8, 64, 2198)  # (8820 - 32)//4 + 1 = 2198
+        enc_output = self.audio_encoder(input)
+
+        # === 2. Encode EEG ===
+        spike_input = torch.nn.functional.interpolate(
+            spike_input,
+            size=209468,  # desired time dimension length
+            mode='linear',  # linear interpolation for time series
+            align_corners=False)  # Result shape: (8, 20, 11018)
+
+        enc_output_spike = self.spike_encoder(spike_input)
+
+        # === 4. Apply TCN and masks ===
+        masks = torch.sigmoid(self.TCN(enc_output, enc_output_spike)).view(
+            batch_size, self.num_spk, self.enc_channel, -1
+        )
+        # masks shape: (8, 1, 64, 11011)
+        masked_output = enc_output.unsqueeze(1) * masks  # (8, 1, 64, 11011)
+
+        # === 5. Decode waveform ===
+        output = self.decoder(masked_output.view(batch_size * self.num_spk, self.enc_channel, -1))
+
+        # Final output shape: (8, 1, 44100)  # clean 1s audio
+        output = output.view(batch_size, self.num_spk, -1)
+
+        return output
+
+
+def test_conv_tasnet():
+    x = torch.rand(8, 1, 29180)
+    y = torch.rand(8, 128, 29180)
+    nnet = BASEN()
+    x = nnet(x, y)
+    s1 = x[0]
+    print(s1.shape)
+
+
+if __name__ == "__main__":
+    test_conv_tasnet()
