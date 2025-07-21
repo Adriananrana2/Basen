@@ -19,8 +19,8 @@
             "iters_per_ckpt": 1
         },
         "optimization": {
-            "epochs": 10,
-            "learning_rate": 2e-4,
+            "epochs": 100,
+            "learning_rate": 4e-4,
             "batch_size_per_gpu_online": 6,
             "batch_size_per_gpu_offline": 3
         }

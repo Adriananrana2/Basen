@@ -278,10 +278,10 @@ def train(num_gpus, rank, group_name,
                 optimizer.zero_grad()
                 loss = sisdr(output, current_clean)
                 if num_gpus > 1:
-                    reduced_loss = reduce_tensor(loss.data, num_gpus).item()
+                    sliding_window_loss = reduce_tensor(loss.data, num_gpus).item()
                 else:
-                    reduced_loss = loss.item()
-                sample_loss += reduced_loss
+                    sliding_window_loss = loss.item()
+                sample_loss += sliding_window_loss
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(net.parameters(), 1e9)
                 scheduler.step()
@@ -306,7 +306,7 @@ def train(num_gpus, rank, group_name,
                 if rank == 0:
                     # save to tensorboard
                     tb.add_scalar("Train/Train-Loss", sample_loss, cur_iter)
-                    tb.add_scalar("Train/Train-Reduced-Loss", reduced_loss, cur_iter)
+                    tb.add_scalar("Train/Train-Sliding-Window-Loss", sliding_window_loss, cur_iter)
                     tb.add_scalar("Train/Gradient-Norm", grad_norm, cur_iter)
                     tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], cur_iter)
                     tb.add_scalar("Val/Val-Loss", val_loss, cur_iter)
