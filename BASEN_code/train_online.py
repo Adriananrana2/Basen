@@ -25,8 +25,7 @@ np.random.seed(0)
 
 def val(dataloader, net, loss_fn):
     net.eval()
-    test_loss, correct = 0, 0
-    total_iter = 0
+    test_loss = 0
     with torch.no_grad():
         # for each iteration (a batch)
         for mixed_audio, eeg, clean_audio, input_paths in dataloader:
@@ -54,7 +53,6 @@ def val(dataloader, net, loss_fn):
 
             # Sliding window
             while audio_ptr + audio_window_stride <= total_audio_len:
-                total_iter += 1
                 # === 1. Generate attractor from past extracted audio ===
                 # past_extracted_audio shape: (8, 1, 35280)
                 # Append 28 zeros for 7 missing steps (kernel continuity)
@@ -75,34 +73,31 @@ def val(dataloader, net, loss_fn):
                     [padded_past_eeg, eeg[:, :, eeg_ptr: eeg_ptr + int(eeg_window_size * 0.2)]],
                     dim=-1)  # shape: (8, 20, 1287)
 
-                # === 4. Read corresponding 1s clean target ===
-                current_clean = clean_audio[:, :, audio_ptr - int(audio_window_size * 0.8): audio_ptr + int(
-                    audio_window_size * 0.2)]  # shape: (8, 1, 44100)
-
-                # === 5. Forward pass ===
+                # === 4. Forward pass ===
                 # current_audio_input ([8, 2, 8820]) 44100*0.2=8820 0.2s audio input
                 # asec_7stride_eeg ([8, 20, 1287]) 256*5+7=1287
                 # audio_attractor ([8, 64, 8820]) a_s streach to (44100*0.8-32)/4+1 + 7 = 8820
                 pred = net(current_audio_input, asec_7stride_eeg, a_s_past=audio_attractor)  # output: (8, 1, 44100)
-                test_loss += loss_fn(pred, current_clean).item()
 
-                # === 6. Collect audio ===
+                # === 5. Collect audio ===
                 if len(collected_audio) == 0:
                     collected_audio.append(pred[:, :, :])  # first 1s
                 else:
                     collected_audio.append(pred[:, :, -audio_window_stride:])  # last 0.2s (8820 samples)
 
-                # === 7. Update past extracted audio ===
+                # === 6. Update past extracted audio ===
                 past_extracted_audio = pred[:, :, -int(audio_window_size * 0.8):]  # shape: (8, 1, 35280)
 
-                # === 8. Advance time pointers by 0.2s
-                total_iter += 1
+                # === 7. Advance time pointers by 0.2s
                 audio_ptr += audio_window_stride
                 eeg_ptr += eeg_window_stride
 
             # === Save extracted audio ===
             # Concatenate all collected output chunks (1s + 0.2s * 94 = 19s)
             full_extracted = torch.cat(collected_audio, dim=-1)  # shape: (8, 1, 837900)
+
+            # accumulate loss for each 19s prediction
+            test_loss += loss_fn(full_extracted, clean_audio).item()
 
             # Create save directory
             save_dir = os.path.join(os.path.dirname(__file__), "extracted_audio")
@@ -128,7 +123,7 @@ def val(dataloader, net, loss_fn):
                 waveform = full_extracted[i, 0].detach().cpu()
                 torchaudio.save(save_path, waveform.unsqueeze(0), sample_rate=44100)
 
-    test_loss /= total_iter
+    test_loss /= len(dataloader)
     print(f"Val Avg loss: {test_loss:>8f}")
     return test_loss
 
