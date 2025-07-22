@@ -106,6 +106,17 @@ def val(dataloader, net, loss_fn):
 
             # Create save directory
             save_dir = os.path.join(os.path.dirname(__file__), "extracted_audio")
+
+            if network_config["offline_0_online_1"] == 0:
+                save_dir = os.path.join(save_dir, "offline")
+            else:
+                save_dir = os.path.join(save_dir, "online")
+
+            if network_config["instument_all_0_single_1"] == 0:
+                save_dir = os.path.join(save_dir, "all")
+            else:
+                save_dir = os.path.join(save_dir, network_config["instument_name"])
+
             os.makedirs(save_dir, exist_ok=True)
 
             # Save each sample using original filename
@@ -129,7 +140,17 @@ def train(num_gpus, rank, group_name,
         print('exp_path:', exp_path, sep="")
 
     # Create tensorboard logger.
-    log_directory = os.path.join(log["directory"], exp_path)
+
+    if network_config["offline_0_online_1"] == 0:
+        log_directory = os.path.join(log["directory"], exp_path, "offline")
+    else:
+        log_directory = os.path.join(log["directory"], exp_path, "online")
+
+    if network_config["instument_all_0_single_1"] == 0:
+        log_directory = os.path.join(log_directory, "all")
+    else:
+        log_directory = os.path.join(log_directory, network_config["instument_name"])
+
     if rank == 0:
         tb = SummaryWriter(os.path.join(log_directory, 'tensorboard'))
 
@@ -145,9 +166,18 @@ def train(num_gpus, rank, group_name,
         print("ckpt_directory: ", ckpt_directory, flush=True, sep="")
 
     # load training data
-    trainloader, valloader = load_CleanNoisyPairDataset(**trainset_config,
-                                                        batch_size=optimization["batch_size_per_gpu_online"],
-                                                        num_gpus=num_gpus)
+    if network_config["instument_all_0_single_1"] == 0:
+        trainloader, valloader = load_CleanNoisyPairDataset(**trainset_config_all_insutments,
+                                                            instument_all_0_single_1 = network_config["instument_all_0_single_1"],
+                                                            instument_name = network_config["instument_name"],
+                                                            batch_size=optimization["batch_size_per_gpu_offline"],
+                                                            num_gpus=num_gpus)
+    else:
+        trainloader, valloader = load_CleanNoisyPairDataset(**trainset_config_single_insutment,
+                                                            instument_all_0_single_1 = network_config["instument_all_0_single_1"],
+                                                            instument_name = network_config["instument_name"],
+                                                            batch_size=optimization["batch_size_per_gpu_offline"],
+                                                            num_gpus=num_gpus)
     print('Data loaded')
 
     # predefine model
@@ -197,17 +227,17 @@ def train(num_gpus, rank, group_name,
     cur_iter = ckpt_iter + 1
 
     # define learning rate scheduler
-    n_epochs_train = optimization["epochs"]                      # See BASEN.json, 10
-    n_batchs_train = len(trainloader)                           # Number of batches in trainloader = 186/6 = 31
-    n_slides_train = 91                                          # ((44100 * 19)-44100) / (44100*0.2) + 1 = 91
+    n_epochs_train = optimization["epochs"]  # See BASEN.json, 10
+    n_batchs_train = len(trainloader)  # Number of batches in trainloader = 186/6 = 31
+    n_slides_train = 91  # ((44100 * 19)-44100) / (44100*0.2) + 1 = 91
     scheduler = LinearWarmupCosineDecay(
         optimizer,
-        lr_max=optimization["learning_rate"],                   # Target max learning rate
-        n_slide=n_epochs_train*n_batchs_train*n_slides_train,   # Total number of training steps or epochs
-        iteration=cur_iter,                                     # Current iteration (if resuming training)
-        divider=25,                                             # Initial LR = lr_max / divider
-        warmup_proportion=0.05,                                 # Warmup = first 5% of steps
-        phase=('linear', 'cosine'),                             # Use linear warmup + cosine decay
+        lr_max=optimization["learning_rate"],  # Target max learning rate
+        n_slide_or_iter=n_epochs_train * n_batchs_train * n_slides_train,  # Total number of training steps or epochs
+        iteration=cur_iter,  # Current iteration (if resuming training)
+        divider=25,  # Initial LR = lr_max / divider
+        warmup_proportion=0.05,  # Warmup = first 5% of steps
+        phase=('linear', 'cosine'),  # Use linear warmup + cosine decay
     )
 
     sisdr = si_sidrloss().cuda()
@@ -243,7 +273,7 @@ def train(num_gpus, rank, group_name,
 
             # Sliding window
             # Training loss tool
-            sample_loss = 0.0
+            batch_loss = 0.0
             n_slide = 0
             while audio_ptr + audio_window_stride <= total_audio_len:
                 n_slide += 1
@@ -281,7 +311,7 @@ def train(num_gpus, rank, group_name,
                     sliding_window_loss = reduce_tensor(loss.data, num_gpus).item()
                 else:
                     sliding_window_loss = loss.item()
-                sample_loss += sliding_window_loss
+                batch_loss += sliding_window_loss
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(net.parameters(), 1e9)
                 scheduler.step()
@@ -296,16 +326,16 @@ def train(num_gpus, rank, group_name,
 
             cur_iter += 1
             # save checkpoint
-            sample_loss /= n_slide
+            batch_loss /= n_slide
             if cur_iter > 0 and cur_iter % log["iters_per_ckpt"] == 0 and rank == 0:
-                print("iteration: {} \tsample loss: {:.7f}".format(cur_iter, sample_loss), flush=True)
+                print("iteration: {} \tbatch_loss: {:.7f}".format(cur_iter, batch_loss), flush=True)
 
                 val_loss = val(valloader, net, sisdr)
                 net.train()
 
                 if rank == 0:
                     # save to tensorboard
-                    tb.add_scalar("Train/Train-Loss", sample_loss, cur_iter)
+                    tb.add_scalar("Train/Train-Batch-Loss", batch_loss, cur_iter)
                     tb.add_scalar("Train/Train-Sliding-Window-Loss", sliding_window_loss, cur_iter)
                     tb.add_scalar("Train/Gradient-Norm", grad_norm, cur_iter)
                     tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], cur_iter)
@@ -352,8 +382,12 @@ if __name__ == "__main__":
     dist_config = config["dist_config"]  # to initialize distributed training
     global network_config
     network_config = config["network_config"]  # to define network
-    global trainset_config
-    trainset_config = config["trainset_config"]  # to load trainset
+    if network_config["instument_all_0_single_1"] == 0:
+        global trainset_config_all_insutments
+        trainset_config_all_insutments = config["trainset_config_all_insutments"]  # to load all insutments trainset
+    else: 
+        global trainset_config_single_insutment
+        trainset_config_single_insutment = config["trainset_config_single_insutment"]  # to load single insutment trainset
 
     num_gpus = torch.cuda.device_count()
     if num_gpus > 1:

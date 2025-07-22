@@ -1,6 +1,8 @@
 {
     "network_config": {
         "offline_0_online_1": 1,
+        "instument_all_0_single_1": 1,
+        "instument_name": "Gt",
         "enc_channel": 64,
         "feature_channel": 32,
         "encoder_kernel_size": 32,
@@ -25,10 +27,15 @@
             "batch_size_per_gpu_offline": 3
         }
     },
-    "trainset_config": {
+    "trainset_config_all_insutments": {
         "stimulus_wav_dir": "../../../Dataset/MADEEG/processed_data/stimulus_wav",
         "isolated_wav_dir": "../../../Dataset/MADEEG/processed_data/isolated_wav",
         "response_npy_dir": "../../../Dataset/MADEEG/processed_data/response_npy"
+    },
+    "trainset_config_single_insutment": {
+        "stimulus_wav_dir": "../../../Dataset/MADEEG_By_Instruments/processed_data/stimulus_wav",
+        "isolated_wav_dir": "../../../Dataset/MADEEG_By_Instruments/processed_data/isolated_wav",
+        "response_npy_dir": "../../../Dataset/MADEEG_By_Instruments/processed_data/response_npy"
     },
     "gen_config": {
         "output_directory": "./exp"

@@ -1,5 +1,5 @@
 import os
-import time 
+import time
 import functools
 import numpy as np
 from math import cos, pi, floor, sin
@@ -21,7 +21,7 @@ def rescale(x):
 def find_max_epoch(path):
     """
     Find latest checkpoint
-    
+
     Returns:
     maximum iteration, -1 if there is no (valid) checkpoint
     """
@@ -31,7 +31,7 @@ def find_max_epoch(path):
     for f in files:
         if len(f) <= 4:
             continue
-        if f[-4:]  == '.pkl':
+        if f[-4:] == '.pkl':
             number = f[:-4]
             try:
                 epoch = max(epoch, int(number))
@@ -48,16 +48,16 @@ def print_size(net, keyword=None):
     if net is not None and isinstance(net, torch.nn.Module):
         module_parameters = filter(lambda p: p.requires_grad, net.parameters())
         params = sum([np.prod(p.size()) for p in module_parameters])
-        
+
         print("{} Parameters: {:.6f}M".format(
             net.__class__.__name__, params / 1e6), flush=True, end="; ")
-        
+
         if keyword is not None:
             keyword_parameters = [p for name, p in net.named_parameters() if p.requires_grad and keyword in name]
             params = sum([np.prod(p.size()) for p in keyword_parameters])
             print("{} Parameters: {:.6f}M".format(
                 keyword, params / 1e6), flush=True, end="; ")
-        
+
         print(" ")
 
 
@@ -100,19 +100,19 @@ class Phase:
 
 class LinearWarmupCosineDecay:
     def __init__(
-        self,
-        optimizer,
-        lr_max,
-        n_slide,
-        iteration=0,
-        divider=25,
-        warmup_proportion=0.3,
-        phase=('linear', 'cosine'),
+            self,
+            optimizer,
+            lr_max,
+            n_slide_or_iter,  # Total number of slides in online mode, or total number of iterations in offline mode
+            iteration=0,
+            divider=25,
+            warmup_proportion=0.3,
+            phase=('linear', 'cosine'),
     ):
         self.optimizer = optimizer
 
-        phase1 = int(n_slide * warmup_proportion)
-        phase2 = n_slide - phase1
+        phase1 = int(n_slide_or_iter * warmup_proportion)
+        phase2 = n_slide_or_iter - phase1
         lr_min = lr_max / divider
 
         phase_map = {'linear': anneal_linear, 'cosine': anneal_cosine}
@@ -194,13 +194,11 @@ def loss_fn(net, X, mrstftloss, **kwargs):
     """
 
     assert type(X) == tuple and len(X) == 3
-    
+
     noisy_audio, eeg, clean_audio = X
     loss = 0.0
     denoised_audio = net(noisy_audio, eeg)
     sc_loss = mrstftloss(denoised_audio.squeeze(1), clean_audio.squeeze(1))
     loss += sc_loss
 
-
     return loss
-

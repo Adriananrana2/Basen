@@ -1,7 +1,6 @@
 BASEN_code/__pycache__/
 BASEN_code/000test/
 BASEN_code/data/
-BASEN_code/exp/BASEN/tensorboard/
+BASEN_code/exp/
 BASEN_code/extracted_audio/
 BASEN_code/utility/__pycache__/
-BASEN_code/exp/BASEN/checkpoint/
