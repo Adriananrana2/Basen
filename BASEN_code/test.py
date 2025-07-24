@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 sys.path.append('../')
 
-from BASEN import BASEN
+from BASEN import BASEN_ONLINE
 import pandas as pd
 from tools.VeryCustomSacred import CustomExperiment, ChooseGPU
 from tools.utilities import timeStructured
@@ -48,7 +48,7 @@ def test(model_path, dataset_root):
     images_dir = os.path.join(*[exp_dir, 'images'])
     other_dir = os.path.join(*[exp_dir, 'other_outputs'])
     device = "cuda"
-    model = BASEN().to('cuda')
+    model = BASEN_ONLINE().to('cuda')
 
     print('loading model')
     check_point = torch.load(model_path)

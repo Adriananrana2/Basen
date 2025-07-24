@@ -73,7 +73,7 @@ class InstrumentEncoder(nn.Module):
         return h_n.squeeze(0)  # [B, hidden_dim]
 
 
-class BASEN(nn.Module):
+class BASEN_ONLINE(nn.Module):
     """
         The Brain-Assisted Speech Enhancement Network, This is adapted from Conv-TasNet.
 
@@ -88,7 +88,7 @@ class BASEN(nn.Module):
 
     def __init__(self, enc_channel=64, feature_channel=32, encoder_kernel_size=32, layer_per_stack=8, stack=3,
                  kernel=3, CMCA_layer_num=3):
-        super(BASEN, self).__init__()
+        super(BASEN_ONLINE, self).__init__()
 
         # hyper parameters
         self.enc_channel = enc_channel
@@ -170,7 +170,7 @@ class BASEN(nn.Module):
 def test_conv_tasnet():
     x = torch.rand(8, 1, 29180)
     y = torch.rand(8, 128, 29180)
-    nnet = BASEN()
+    nnet = BASEN_ONLINE()
     x = nnet(x, y)
     s1 = x[0]
     print(s1.shape)
@@ -261,7 +261,7 @@ class BASEN_OFFLINE(nn.Module):
 def test_conv_tasnet():
     x = torch.rand(8, 1, 29180)
     y = torch.rand(8, 128, 29180)
-    nnet = BASEN()
+    nnet = BASEN_ONLINE()
     x = nnet(x, y)
     s1 = x[0]
     print(s1.shape)
