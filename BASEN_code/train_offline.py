@@ -265,6 +265,11 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                             os.path.join(latest_ckpt_directory, checkpoint_name))
                 print('model at iteration %s is saved' % cur_iter)
 
+                # delete old checkpoints
+                for i in range(cur_iter):
+                    old_ckpt = os.path.join(latest_ckpt_directory, '{}.pkl'.format(i))
+                    os.remove(old_ckpt)
+
                 # save the best checkpoint
                 if val_loss < last_val_loss:
                     print(
