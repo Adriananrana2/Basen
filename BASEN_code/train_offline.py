@@ -243,13 +243,13 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
 
             # save records
             if rank == 0:
-                print("iteration: {} \tbatch_loss: {:.7f}".format(cur_iter, reduced_loss), flush=True)
+                print("iteration: {} \ttrain_loss: {:.7f}".format(cur_iter, reduced_loss), flush=True)
 
                 val_loss = val(valloader, net, sisdr)
                 net.train()
 
                 # save to tensorboard
-                tb.add_scalar("Train/Train-Batch-Loss", reduced_loss, cur_iter)
+                tb.add_scalar("Train/Train-Loss", reduced_loss, cur_iter)
                 tb.add_scalar("Train/Gradient-Norm", grad_norm, cur_iter)
                 tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], cur_iter)
                 tb.add_scalar("Val/Val-Loss", val_loss, cur_iter)
@@ -263,17 +263,18 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                             'optimizer_state_dict': optimizer.state_dict(),
                             'training_time_seconds': int(time.time() - time0)},
                             os.path.join(latest_ckpt_directory, checkpoint_name))
-                print('model at iteration %s is saved' % cur_iter)
+                print('latest checkpoint at iteration %s is saved' % cur_iter)
 
                 # delete old checkpoints
                 for i in range(cur_iter):
                     old_ckpt = os.path.join(latest_ckpt_directory, '{}.pkl'.format(i))
                     os.remove(old_ckpt)
+                    print(f"Deleted old checkpoint: {old_ckpt}")
 
                 # save the best checkpoint
                 if val_loss < last_val_loss:
                     print(
-                        'validation loss decreases from {} to {}, save best checkpoint'.format(last_val_loss, val_loss))
+                        'validation loss decreases from {} to {}, save the best checkpoint'.format(last_val_loss, val_loss))
                     last_val_loss = val_loss
                     checkpoint_name = '{}.pkl'.format(cur_iter)
 
@@ -287,7 +288,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                                 'training_time_seconds': int(time.time() - time0)},
                                os.path.join(best_ckpt_directory, checkpoint_name))
 
-                    print('model at iteration %s is saved' % cur_iter)
+                    print('best checkpoint at iteration %s is saved' % cur_iter)
 
             cur_iter += 1
 

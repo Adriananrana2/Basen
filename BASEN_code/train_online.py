@@ -237,12 +237,6 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
             print('Model at iteration %s has been trained for %s seconds' % (
                 ckpt_iter, checkpoint['training_time_seconds']))
             print('checkpoint model loaded successfully')
-
-            # delete old checkpoints
-            for i in range(cur_iter):
-                old_ckpt = os.path.join(latest_ckpt_directory, '{}.pkl'.format(i))
-                os.remove(old_ckpt)
-
         except:
             ckpt_iter = -1
             print('No valid checkpoint model found, start training from initialization.')
@@ -389,6 +383,12 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                             'training_time_seconds': int(time.time() - time0)},
                             os.path.join(latest_ckpt_directory, checkpoint_name))
                 print('latest checkpoint at iteration %s is saved' % cur_iter)
+
+                # delete old checkpoints
+                for i in range(cur_iter):
+                    old_ckpt = os.path.join(latest_ckpt_directory, '{}.pkl'.format(i))
+                    os.remove(old_ckpt)
+                    print(f"Deleted old checkpoint: {old_ckpt}")
 
                 # save the best checkpoint
                 if val_loss < last_val_loss:
