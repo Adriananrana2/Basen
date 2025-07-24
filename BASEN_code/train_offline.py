@@ -139,8 +139,9 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                 for event in ea.Scalars(tag):
                     if event.step <= ckpt_iter:
                         tb.add_scalar(tag, event.value, event.step)
-
+            tb.flush()
             print(f"Re-logged up to iteration {ckpt_iter}")
+
             # delete old tfevents file
             os.remove(old_tb_file)
             print(f"Deleted old TensorBoard log: {old_tb_file}")
@@ -252,6 +253,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                 tb.add_scalar("Train/Gradient-Norm", grad_norm, cur_iter)
                 tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], cur_iter)
                 tb.add_scalar("Val/Val-Loss", val_loss, cur_iter)
+                tb.flush()
 
                 # save the latest checkpoint
                 checkpoint_name = '{}.pkl'.format(cur_iter)
