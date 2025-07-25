@@ -274,7 +274,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
     sisdr = si_sidrloss().cuda()
     last_val_loss = 100.0
 
-    epoch = math.floor(cur_iter / n_batchs_train)
+    epoch = 0
     while epoch < optimization["epochs"]:
         print("========== EPOCH ", epoch, " ==========", sep="")
 
@@ -371,16 +371,6 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                 tb.add_scalar("Train/Gradient-Norm", grad_norm, cur_iter)
                 tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], cur_iter)
                 tb.add_scalar("Val/Val-Loss", val_loss, cur_iter)
-
-                # save the latest checkpoint
-                checkpoint_name = '{}.pkl'.format(cur_iter)
-
-                torch.save({'iter': cur_iter,
-                            'model_state_dict': net.state_dict(),
-                            'optimizer_state_dict': optimizer.state_dict(),
-                            'training_time_seconds': int(time.time() - time0)},
-                            os.path.join(latest_ckpt_directory, checkpoint_name))
-                print('latest checkpoint at iteration %s is saved' % cur_iter)
 
                 # save the best checkpoint
                 if val_loss < last_val_loss:
