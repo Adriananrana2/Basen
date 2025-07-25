@@ -270,7 +270,6 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                     old_ckpt = os.path.join(latest_ckpt_directory, '{}.pkl'.format(i))
                     try:
                         os.remove(old_ckpt)
-                        print(f"Deleted old checkpoint: {old_ckpt}")
                     except:
                         pass
 
