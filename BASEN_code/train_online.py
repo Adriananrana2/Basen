@@ -385,7 +385,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                 print('latest checkpoint at iteration %s is saved' % cur_iter)
 
                 # delete old checkpoints
-                for i in range(cur_iter):
+                for i in range(cur_iter - n_batchs_train):
                     old_ckpt = os.path.join(latest_ckpt_directory, '{}.pkl'.format(i))
                     try:
                         os.remove(old_ckpt)
