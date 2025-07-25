@@ -118,9 +118,10 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
         # find the existing tfevents file
         old_tb_files = glob.glob(os.path.join(tb_dir, "events.out.tfevents.*"))
 
-        # creat new or load old
+        # create new or load old
         if len(old_tb_files) == 0:
             tb = SummaryWriter(tb_dir)
+            last_val_loss = 100  # no old logs, nothing to resume from
 
         elif len(old_tb_files) == 1:
             old_tb_file = old_tb_files[0]
@@ -131,14 +132,24 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
             ea = event_accumulator.EventAccumulator(old_tb_file)
             ea.Reload()
 
+            # Try to extract the last "Val/Val-Loss" at ckpt_iter
+            last_val_loss = None
+            if "Val/Val-Loss" in ea.Tags()['scalars']:
+                for event in ea.Scalars("Val/Val-Loss"):
+                    if event.step == ckpt_iter:
+                        last_val_loss = event.value
+                        print(f"Recovered Val/Val-Loss at step {ckpt_iter}: {last_val_loss}")
+                        break
+
             # create a new log file (same dir)
             tb = SummaryWriter(tb_dir)
- 
-            # copy all events up to ckpt_iter
+
+            # re-log all scalars up to ckpt_iter
             for tag in ea.Tags()['scalars']:
                 for event in ea.Scalars(tag):
                     if event.step <= ckpt_iter:
                         tb.add_scalar(tag, event.value, event.step)
+
             tb.flush()
             print(f"Re-logged up to iteration {ckpt_iter}")
 
@@ -211,7 +222,6 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
     )
 
     sisdr = si_sidrloss().cuda()
-    last_val_loss = 100.0
 
     epoch = math.floor(cur_iter / n_batchs_train)
     while epoch < optimization["epochs"]:
