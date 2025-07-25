@@ -122,7 +122,7 @@ def val(dataloader, net, loss_fn):
                 torchaudio.save(save_path, waveform.unsqueeze(0), sample_rate=44100)
 
     val_loss /= len(dataloader)
-    print(f"Val Avg loss: {val_loss:>8f}")
+    print('Val Avg loss: {:.4f}'.format(val_loss))
     return val_loss
 
 
@@ -362,7 +362,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
 
             # save records
             if rank == 0:
-                print("iteration: {} \ttrain_loss: {:.7f}".format(cur_iter, train_loss), flush=True)
+                print("iteration: {} \ttrain_loss: {:.4f}".format(cur_iter, train_loss), flush=True)
 
                 val_loss = val(valloader, net, sisdr)
                 net.train()
@@ -394,7 +394,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
 
                 # save the best checkpoint
                 if val_loss < last_val_loss:
-                    print('validation loss decreases from {} to {}, save the best checkpoint'.format(last_val_loss, val_loss))
+                    print('validation loss decreases from {:.4f} to {:.4f}, save the best checkpoint'.format(last_val_loss, val_loss))
                     last_val_loss = val_loss
                     checkpoint_name = '{}.pkl'.format(cur_iter)
 
