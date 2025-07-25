@@ -121,7 +121,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
         # create new or load old
         if len(old_tb_files) == 0:
             tb = SummaryWriter(tb_dir)
-            last_val_loss = 100  # no old logs, nothing to resume from
+            last_val_loss = 100.00  # no old logs, nothing to resume from
 
         elif len(old_tb_files) == 1:
             old_tb_file = old_tb_files[0]
