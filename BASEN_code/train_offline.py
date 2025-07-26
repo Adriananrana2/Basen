@@ -61,7 +61,7 @@ def val(dataloader, net, loss_fn):
                 torchaudio.save(save_path, waveform.unsqueeze(0), sample_rate=44100)
 
     val_loss /= len(dataloader)
-    print('Val Avg loss: {:.4f}'.format(val_loss))
+    print('Validation Loss: {:.4f}'.format(val_loss))
     return val_loss
 
 
@@ -105,12 +105,15 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
     n_batchs_train = len(trainloader)  # Number of batches per epoch in trainloader
 
     if log["ckpt_iter"] == 'max':
-        ckpt_iter = find_max_epoch(latest_ckpt_directory)
+        ckpt_iter = find_max_epoch(latest_ckpt_directory) # last iter completed
     else:
         ckpt_iter = log["ckpt_iter"]
+
     if ckpt_iter != -1:
-        cut_off_epoch = math.floor(ckpt_iter / n_batchs_train)
-        ckpt_iter = cut_off_epoch * n_batchs_train - 1
+        cut_off_epoch = math.floor(ckpt_iter / n_batchs_train) # last epoch completed
+        ckpt_iter = cut_off_epoch * n_batchs_train # last iter completed TRIMMED
+    elif ckpt_iter == -1:
+        ckpt_iter = 0
 
     # ========== load tensorboard ==========
     if rank == 0:
@@ -126,7 +129,6 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
         elif len(old_tb_files) == 1:
             old_tb_file = old_tb_files[0]
             print(f"Found old TensorBoard file: {old_tb_file}")
-            print(f"Truncating logs at iteration {ckpt_iter}")
 
             # load old events
             ea = event_accumulator.EventAccumulator(old_tb_file)
@@ -138,7 +140,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                 for event in ea.Scalars("Val/Val-Loss"):
                     if event.step == ckpt_iter:
                         last_val_loss = event.value
-                        print(f"Recovered Val/Val-Loss at step {ckpt_iter}: {last_val_loss}")
+                        print("Recovered Val-Loss at iteration {}: {:.4f}".format(ckpt_iter, last_val_loss))
                         break
 
             # create a new log file (same dir)
@@ -151,11 +153,11 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                         tb.add_scalar(tag, event.value, event.step)
 
             tb.flush()
-            print(f"Re-logged up to iteration {ckpt_iter}")
+            print(f"Re-logged TensorBoard up to iteration {ckpt_iter}")
 
             # delete old tfevents file
             os.remove(old_tb_file)
-            print(f"Deleted old TensorBoard log: {old_tb_file}")
+            print(f"Deleted old TensorBoard")
 
         elif len(old_tb_files) > 1:
             raise RuntimeError(f"Expected exactly 1 tfevents file in {tb_dir}, found {len(old_tb_files)}")
@@ -172,7 +174,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
 
     # ========== load checkpoint ==========
     time0 = time.time()
-    if ckpt_iter >= 0:
+    if ckpt_iter > 0:
         try:
             # load checkpoint file
             model_path = os.path.join(latest_ckpt_directory, '{}.pkl'.format(ckpt_iter))
@@ -188,10 +190,10 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                 ckpt_iter, checkpoint['training_time_seconds']))
             print('checkpoint model loaded successfully')
         except:
-            ckpt_iter = -1
+            ckpt_iter = 0
             print('No valid checkpoint model found, start training from initialization.')
     else:
-        ckpt_iter = -1
+        ckpt_iter = 0
         print('No valid checkpoint model found, start training from initialization.')
 
     # ========== distributed running initialization ==========
@@ -201,7 +203,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
         if not os.path.isdir(latest_ckpt_directory):
             os.makedirs(latest_ckpt_directory)
             os.chmod(latest_ckpt_directory, 0o775)
-        print("latest_ckpt_directory: ", latest_ckpt_directory, flush=True, sep="")
+        print("Latest ckpt directory: ", latest_ckpt_directory, flush=True, sep="")
 
     # ========== apply gradient all reduce ==========
     if num_gpus > 1:
@@ -223,9 +225,9 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
 
     sisdr = si_sidrloss().cuda()
 
-    epoch = math.floor(cur_iter / n_batchs_train)
-    while epoch < optimization["epochs"]:
-        print("========== EPOCH ", epoch, " ==========", sep="")
+    epoch = math.floor(cur_iter / n_batchs_train) + 1
+    while epoch <= optimization["epochs"]:
+        print("\n========== EPOCH ", epoch, " ==========", sep="")
 
         # for each iteration (a batch)
         for mixed_audio, eeg, clean_audio, _ in trainloader:
@@ -248,12 +250,13 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
 
             loss.backward()
             grad_norm = nn.utils.clip_grad_norm_(net.parameters(), 1e9)
-            scheduler.step()
+            # scheduler.step()
             optimizer.step()
 
             # save records
             if rank == 0:
-                print("iteration: {} \ttrain_loss: {:.4f}".format(cur_iter, reduced_loss), flush=True)
+                print("\nIteration: {}".format(cur_iter), flush=True)
+                print("Training Loss: {:.4f}".format(reduced_loss), flush=True)
 
                 val_loss = val(valloader, net, sisdr)
                 net.train()
@@ -273,7 +276,6 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                             'optimizer_state_dict': optimizer.state_dict(),
                             'training_time_seconds': int(time.time() - time0)},
                             os.path.join(latest_ckpt_directory, checkpoint_name))
-                print('latest checkpoint at iteration %s is saved' % cur_iter)
 
                 # delete old checkpoints
                 for i in range(cur_iter - n_batchs_train):
@@ -285,7 +287,7 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
 
                 # save the best checkpoint
                 if val_loss < last_val_loss:
-                    print('validation loss decreases from {:.4f} to {:.4f}, save the best checkpoint'.format(last_val_loss, val_loss))
+                    print('Validation loss decreased from {:.4f} to {:.4f}, save the best checkpoint'.format(last_val_loss, val_loss))
                     last_val_loss = val_loss
                     checkpoint_name = '{}.pkl'.format(cur_iter)
 
@@ -299,12 +301,10 @@ def train(num_gpus, rank, group_name, exp_path, log, optimization):
                                 'training_time_seconds': int(time.time() - time0)},
                                os.path.join(best_ckpt_directory, checkpoint_name))
 
-                    print('best checkpoint at iteration %s is saved' % cur_iter)
-
             cur_iter += 1
 
+        print('\nEpoch {} done'.format(epoch))
         epoch += 1
-        print('epoch {} done'.format(epoch))
 
     # ========== close tensorboard fter training ==========
     if rank == 0:
